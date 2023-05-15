@@ -90,6 +90,8 @@ local figs={
 		"   "(
 	),rots.wiggly),
 }
+local font=love.graphics.newFont(9,"mono",1)
+font:setFilter("nearest")
 for k,v in pairs(figs) do
 	local figs,figsl={v},figs
 	for n=2,4 do
@@ -141,15 +143,31 @@ do
 	local game={}
 	game.__index=game
 	local W,H=10,20
+	local vmovres=4
 	function newgame()
 		local self=setmetatable({},game)
 		self.board={}
+		self.score=0
+		self.dscore=0
 		for y=1,H do
 			self.board[y]={off=0}
 		end
-		self.nextfig={math.random(1,#figs),math.random(1,4)}
 		self:espawn()
 		return self
+	end
+	function game:randpiece()
+		if not self.rbag or #self.rbag==0 then
+			self.rbag=self.rbag or {}
+			for n=1,#figs do
+				self.rbag[#self.rbag+1]=n
+				local si=math.random(1,#self.rbag-1)
+				if si>0 then
+					self.rbag[si],self.rbag[#self.rbag]=self.rbag[#self.rbag],self.rbag[si]
+				end
+			end
+		end
+		local fig=table.remove(self.rbag)
+		return fig
 	end
 	function game:espawn()
 		if self.fig then
@@ -164,11 +182,17 @@ do
 		end
 		if self.over then return end
 		self.fig=self.nextfig
-		self.nextfig={math.random(1,#figs),math.random(1,4)}
+		--[=[
+		self.nextfig={1,math.random(1,4)} --testing
+		--[[]=]
+		self.nextfig={self:randpiece(),math.random(1,4)}
+		--]]
+		if not self.fig then return self:espawn()end
 		self.cfmx=W+1-figs[self.fig[1]][self.fig[2]].w
 		self.cfx=math.random(1,self.cfmx)
 		self.cfy=H+1
 		self.cfdx=self.cfx
+		self.cfdy=self.cfy
 	end
 	function game:move(a)
 		local s=sign(a)
@@ -254,18 +278,27 @@ do
 			self.over=interp(self.over,1,dt/4)
 			return
 		end
-		self.cfy=self.cfy-dt*4*(self.fast and 8 or 1)
-		local ry=math.ceil(self.cfy)
-		if self:collide(self.cfx,ry-1) then
-			self.cfy=ry
-			self.colt=(self.colt or 0.5)-dt
-		else
-			self.colt=nil
+		self.vmovac=(self.vmovac or 0)+math.min(1,dt*4*(self.fast and 16 or 1))
+		local vstep=1/vmovres
+		while self.vmovac>vstep do
+			self.vmovac=self.vmovac-vstep
+			self.cfy=self.cfy-vstep
+			local ry=math.ceil(self.cfy)
+			if self:collide(self.cfx,ry-1) then
+				self.cfy=ry
+				self.colt=(self.colt or 2)-vstep*(self.fast and 1/16 or 1)
+			else
+				self.colt=nil
+			end
+			if self.colt and self.colt<=0 then
+				self.colt=nil
+				self:espawn()
+			end
 		end
-		if self.colt and self.colt<=0 then
-			self:espawn()
-		end
-		self.cfdx=interp(self.cfdx,self.cfx,dt*4)
+		self.cfdx=interp(self.cfdx,self.cfx,dt*2)
+		self.cfdy=interp(self.cfdy,self.cfy,dt*(self.fast and 2 or 1))
+		self.dscore=interp(self.dscore,self.score,dt)
+		local sc=0
 		for y=1,H do
 			self.board[y].off=interp(self.board[y].off,0,dt)
 			local good=true
@@ -273,10 +306,15 @@ do
 				good=good and self.board[y][x]
 			end
 			if good then
-				table.remove(self.board,y)
-				self.board[y].off=self.board[y].off+1
+				local ol=table.remove(self.board,y)
+				self.board[y].off=self.board[y].off+ol.off+1
 				self.board[#self.board+1]={off=0}
+				sc=sc+1
 			end
+		end
+		if sc>0 then
+			sc=100*(2^(sc-1))
+			self.score=self.score+sc
 		end
 	end
 	function game:draw(x,y,w,h)
@@ -300,12 +338,21 @@ do
 						self:drawcell(x,y+off,self.board[y][x])
 					end
 				end
+				love.graphics.setColor(1,1,1)
 				if not self.over then
-					self:drawfig(self.cfdx,self.cfy,self.fig)
-					love.graphics.translate(W+2.5,H/2)
-					local ox,oy=(5-figs[self.nextfig[1]][self.nextfig[2]].w)/2,(5-figs[self.nextfig[1]][self.nextfig[2]].h)/2
-					self:drawfig(-1.5+ox,H-1.5+oy,self.nextfig)
+					self:drawfig(self.cfdx,self.cfdy,self.fig)
+					love.graphics.push("all")
+						love.graphics.translate(W+2.5,H/2)
+						local ox,oy=(5-figs[self.nextfig[1]][self.nextfig[2]].w)/2,(5-figs[self.nextfig[1]][self.nextfig[2]].h)/2
+						self:drawfig(-1.5+ox,H-1.5+oy,self.nextfig)
+					love.graphics.pop("all")
 				end
+				love.graphics.translate(-W/2+0.5,0.5)
+				local t=("%.8u"):format(math.floor(self.dscore+.5))
+				local tw=font:getWidth(t)
+				love.graphics.scale((W/2-1)/tw)
+				love.graphics.setFont(font)
+				love.graphics.print(t)
 			love.graphics.pop()
 		love.graphics.pop()
 	end
@@ -328,6 +375,9 @@ local keys={
 	},
 	down={
 		down=true,s=true
+	},
+	restart={
+		enter=true,space=true,r=true,
 	},
 	sneak={
 		lshift=true,rshift=true
@@ -358,12 +408,18 @@ function love.keypressed(key)
 	elseif keys.scw[key] or keys.sccw[key] then
 		local a=keys.sccw[key] and -1 or 1
 		game:spin(a)
+	elseif game.over and keys.restart[key] then
+		game=newgame()
 	end
 end
 
+local aa=0
+
 function love.update(dt)
 	game.fast=isdown(keys.down)
-	game:update(dt)
+	if aa==0 then
+		game:update(dt)
+	end
 end
 
 function love.draw()
